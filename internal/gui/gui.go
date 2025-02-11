@@ -153,24 +153,29 @@ func NewMainWindow() (*MainWindow, error) {
 			},
 		},
 		Children: []walk.Widget{
-			walk.HSplitter{
-				Children: []walk.Widget{
-					walk.TextEdit{
-						AssignTo: &mw.logView,
-						ReadOnly: true,
-						MinSize:  walk.Size{Width: 200},
+			Composite{
+				Layout: VBox{},
+				Children: []Widget{
+					HSplitter{
+						Children: []Widget{
+							TextEdit{
+								AssignTo: &mw.logView,
+								ReadOnly: true,
+								MinSize:  Size{Width: 200},
+							},
+						},
 					},
-				},
-			},
-			walk.ProgressBar{
-				AssignTo:    &mw.progressBar,
-				MarqueeMode: true,
-			},
-			walk.PushButton{
-				AssignTo: &mw.button,
-				Text:     "Подписать драйвер",
-				OnClicked: func() {
-					mw.selectAndSignFile()
+					ProgressBar{
+						AssignTo:    &mw.progressBar,
+						MarqueeMode: true,
+					},
+					PushButton{
+						AssignTo: &mw.button,
+						Text:     "Подписать драйвер",
+						OnClicked: func() {
+							mw.selectAndSignFile()
+						},
+					},
 				},
 			},
 		},

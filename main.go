@@ -120,87 +120,7 @@ func runGUI() error {
 		Title:    "GoDriverSigner",
 		MinSize:  Size{800, 600},
 		Layout:   VBox{},
-		MenuItems: []MenuItem{
-			Menu{
-				Text: "&File",
-				Items: []MenuItem{
-					Action{
-						Text: "Sign Driver...",
-						OnTriggered: func() {
-							mw.selectAndSignFile()
-						},
-					},
-					Action{
-						Text: "Verify Signature...",
-						OnTriggered: func() {
-							mw.verifySignature()
-						},
-					},
-					Separator{},
-					Action{
-						Text: "Exit",
-						OnTriggered: func() {
-							mw.Close()
-						},
-					},
-				},
-			},
-			Menu{
-				Text: "&Certificate",
-				Items: []MenuItem{
-					Action{
-						Text: "Create New Certificate",
-						OnTriggered: func() {
-							mw.createCertificate()
-						},
-					},
-					Action{
-						Text: "Import Certificate...",
-						OnTriggered: func() {
-							mw.importCertificate()
-						},
-					},
-					Action{
-						Text: "Export Certificate...",
-						OnTriggered: func() {
-							mw.exportCertificate()
-						},
-					},
-				},
-			},
-			Menu{
-				Text: "&Tools",
-				Items: []MenuItem{
-					Action{
-						Text: "Install Windows SDK",
-						OnTriggered: func() {
-							mw.installSDK()
-						},
-					},
-					Action{
-						Text: "Enable Windows Test Mode",
-						OnTriggered: func() {
-							mw.enableTestMode()
-						},
-					},
-				},
-			},
-			Menu{
-				Text: "&Help",
-				Items: []MenuItem{
-					Action{
-						Text: "About",
-						OnTriggered: func() {
-							walk.MsgBox(mw, "About",
-								"GoDriverSigner v1.0\n\nWindows Driver Signing Utility\n"+
-									"Supports test certificate creation and driver signing\n\n"+
-									"© 2024 GoDriverSigner",
-								walk.MsgBoxIconInformation)
-						},
-					},
-				},
-			},
-		},
+		Background: SolidColorBrush{Color: walk.RGB(240, 240, 240)},
 		Children: []Widget{
 			GroupBox{
 				Title:  "Status",
@@ -262,7 +182,9 @@ func runGUI() error {
 							mw.showCertificate()
 						},
 					},
-					HSpacer{Size: 10},
+					HSpacer{
+						Size: 10,
+					},
 					PushButton{
 						Text:    "Delete Certificates",
 						MinSize: Size{150, 40},
