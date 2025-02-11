@@ -151,24 +151,7 @@ func runGUI() error {
 					Action{
 						Text: "Create New Certificate",
 						OnTriggered: func() {
-							go func() {
-								mw.logMessage("Creating new certificate...")
-								mw.setProgress(20)
-								
-								cert, _, err := createAndInstallCertificate()
-								mw.Synchronize(func() {
-									if err != nil {
-										mw.showError("Certificate Creation Error", err)
-										mw.logMessage(fmt.Sprintf("Error: Failed to create certificate: %v", err))
-									} else {
-										mw.logMessage(fmt.Sprintf("Certificate created successfully\nSerial Number: %s", cert.SerialNumber))
-										// Show certificate information
-										certInfo := listExistingCertificates()
-										mw.logMessage("\nCurrent certificate:\n" + certInfo)
-									}
-									mw.setProgress(100)
-								})
-							}()
+							mw.createCertificate()
 						},
 					},
 					Action{
@@ -258,29 +241,17 @@ func runGUI() error {
 							mw.uninstallDriver()
 						},
 					},
-					HSpacer{Size: 10},
+				},
+			},
+			GroupBox{
+				Title:  "Certificate",
+				Layout: HBox{},
+				Children: []Widget{
 					PushButton{
 						Text:    "Create Certificate",
 						MinSize: Size{150, 40},
 						OnClicked: func() {
-							go func() {
-								mw.logMessage("Creating new certificate...")
-								mw.setProgress(20)
-								
-								cert, _, err := createAndInstallCertificate()
-								mw.Synchronize(func() {
-									if err != nil {
-										mw.showError("Certificate Creation Error", err)
-										mw.logMessage(fmt.Sprintf("Error: Failed to create certificate: %v", err))
-									} else {
-										mw.logMessage(fmt.Sprintf("Certificate created successfully\nSerial Number: %s", cert.SerialNumber))
-										// Show certificate information
-										certInfo := listExistingCertificates()
-										mw.logMessage("\nCurrent certificate:\n" + certInfo)
-									}
-									mw.setProgress(100)
-								})
-							}()
+							mw.createCertificate()
 						},
 					},
 					HSpacer{Size: 10},
@@ -288,75 +259,15 @@ func runGUI() error {
 						Text:    "Show Certificate",
 						MinSize: Size{150, 40},
 						OnClicked: func() {
-							certInfo := listExistingCertificates()
-							if certInfo != "" {
-								mw.logMessage("\nCurrent certificate:\n" + certInfo)
-							} else {
-								mw.logMessage("No certificates found")
-							}
+							mw.showCertificate()
 						},
 					},
 					HSpacer{Size: 10},
 					PushButton{
-						Text:    "Delete All Certificates",
+						Text:    "Delete Certificates",
 						MinSize: Size{150, 40},
 						OnClicked: func() {
-							if walk.MsgBox(mw, "Warning",
-								"Are you sure you want to delete all GoDriverSigner certificates?",
-								walk.MsgBoxYesNo|walk.MsgBoxIconWarning) == walk.DlgCmdYes {
-								go func() {
-									mw.logMessage("Deleting all certificates...")
-									mw.setProgress(20)
-									
-									err := deleteAllCertificates()
-									mw.Synchronize(func() {
-										if err != nil {
-											mw.showError("Certificate Deletion Error", err)
-											mw.logMessage(fmt.Sprintf("Error: Failed to delete certificates: %v", err))
-										} else {
-											walk.MsgBox(mw, "Success", 
-												"All certificates deleted successfully",
-												walk.MsgBoxIconInformation)
-											mw.logMessage("All certificates deleted successfully")
-										}
-										mw.setProgress(100)
-									})
-								}()
-							}
-						},
-					},
-					HSpacer{Size: 10},
-					PushButton{
-						Text:    "Check Certificate",
-						MinSize: Size{150, 40},
-						OnClicked: func() {
-							go func() {
-								mw.logMessage("Checking certificate installation...")
-								mw.setProgress(20)
-								cert, _, err := findExistingCertificate()
-								if err != nil {
-									mw.Synchronize(func() {
-										mw.showError("Error", fmt.Errorf("certificate not found: %v", err))
-										mw.logMessage("Error: Certificate not found")
-										mw.setProgress(100)
-									})
-									return
-								}
-								
-								err = checkCertificateInstallation(cert)
-								mw.Synchronize(func() {
-									if err != nil {
-										mw.showError("Error", fmt.Errorf("certificate installation issue: %v", err))
-										mw.logMessage("Error: Certificate not installed correctly")
-									} else {
-										walk.MsgBox(mw, "Success", 
-											"Certificate is properly installed in the system",
-											walk.MsgBoxIconInformation)
-										mw.logMessage("Certificate verified successfully")
-									}
-									mw.setProgress(100)
-								})
-							}()
+							mw.deleteCertificates()
 						},
 					},
 				},
@@ -389,8 +300,16 @@ func runGUI() error {
 		return err
 	}
 
+	// Initialize components
+	if mw.progress != nil {
+		mw.progress.SetValue(0)
+	}
+	if mw.logView != nil {
+		mw.logView.SetText("")
+	}
+
 	// Add window close handler
-	mw.MainWindow.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
+	mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
 		os.Exit(0) // Force terminate all goroutines when window is closed
 	})
 
@@ -552,13 +471,17 @@ func (mw *MyMainWindow) setProgress(value int) {
 
 func (mw *MyMainWindow) selectAndSignFile() {
 	dlg := new(walk.FileDialog)
-	dlg.Title = "Select driver"
+	dlg.Title = "Select Driver"
 	dlg.Filter = "Drivers (*.sys;*.inf)|*.sys;*.inf"
 
-	if ok, err := dlg.ShowOpen(mw); err != nil {
-		mw.showError("Error opening dialog", err)
+	var ok bool
+	var err error
+	ok, err = dlg.ShowOpen(mw)
+	if err != nil {
+		mw.showError("Error Opening Dialog", err)
 		return
-	} else if !ok {
+	}
+	if !ok {
 		return
 	}
 
@@ -571,8 +494,11 @@ func (mw *MyMainWindow) selectAndSignFile() {
 	go func() {
 		var result string
 		var success bool
+		var cert *x509.Certificate
+		var key *rsa.PrivateKey
+		var err error
 
-		cert, key, err := findOrCreateCertificate()
+		cert, key, err = findOrCreateCertificate()
 		if err != nil {
 			result = fmt.Sprintf("Certificate error: %v", err)
 			success = false
@@ -614,13 +540,17 @@ func (mw *MyMainWindow) selectAndSignFile() {
 
 func (mw *MyMainWindow) installDriver() {
 	dlg := new(walk.FileDialog)
-	dlg.Title = "Select driver to install"
+	dlg.Title = "Select Driver to Install"
 	dlg.Filter = "Drivers (*.inf)|*.inf"
 
-	if ok, err := dlg.ShowOpen(mw); err != nil {
-		mw.showError("Error opening dialog", err)
+	var ok bool
+	var err error
+	ok, err = dlg.ShowOpen(mw)
+	if err != nil {
+		mw.showError("Error Opening Dialog", err)
 		return
-	} else if !ok {
+	}
+	if !ok {
 		return
 	}
 
@@ -628,8 +558,13 @@ func (mw *MyMainWindow) installDriver() {
 	mw.setProgress(20)
 
 	go func() {
+		var output []byte
+		var err error
+		var cert *x509.Certificate
+		var key *rsa.PrivateKey
+
 		// Sign driver before installation
-		cert, key, err := findOrCreateCertificate()
+		cert, key, err = findOrCreateCertificate()
 		if err != nil {
 			mw.Synchronize(func() {
 				mw.showError("Certificate Error", err)
@@ -638,7 +573,7 @@ func (mw *MyMainWindow) installDriver() {
 			return
 		}
 
-		if err := signDriver(dlg.FilePath, cert, key); err != nil {
+		if err = signDriver(dlg.FilePath, cert, key); err != nil {
 			mw.Synchronize(func() {
 				mw.showError("Signing Error", err)
 				mw.setProgress(100)
@@ -653,7 +588,7 @@ func (mw *MyMainWindow) installDriver() {
 
 		// Install driver
 		cmd := exec.Command("pnputil", "/add-driver", dlg.FilePath, "/install")
-		output, err := cmd.CombinedOutput()
+		output, err = cmd.CombinedOutput()
 
 		mw.Synchronize(func() {
 			if err != nil {
@@ -670,13 +605,17 @@ func (mw *MyMainWindow) installDriver() {
 
 func (mw *MyMainWindow) uninstallDriver() {
 	dlg := new(walk.FileDialog)
-	dlg.Title = "Select driver to uninstall"
+	dlg.Title = "Select Driver to Uninstall"
 	dlg.Filter = "Drivers (*.inf)|*.inf"
 
-	if ok, err := dlg.ShowOpen(mw); err != nil {
-		mw.showError("Error opening dialog", err)
+	var ok bool
+	var err error
+	ok, err = dlg.ShowOpen(mw)
+	if err != nil {
+		mw.showError("Error Opening Dialog", err)
 		return
-	} else if !ok {
+	} 
+	if !ok {
 		return
 	}
 
@@ -684,13 +623,16 @@ func (mw *MyMainWindow) uninstallDriver() {
 	mw.setProgress(20)
 
 	go func() {
+		var output []byte
+		var err error
+
 		// Get driver name from INF file
 		driverName := filepath.Base(dlg.FilePath)
 		driverName = strings.TrimSuffix(driverName, ".inf")
 
 		// Uninstall driver
 		cmd := exec.Command("pnputil", "/delete-driver", driverName, "/uninstall", "/force")
-		output, err := cmd.CombinedOutput()
+		output, err = cmd.CombinedOutput()
 
 		mw.Synchronize(func() {
 			if err != nil {
@@ -709,6 +651,13 @@ func findOrCreateCertificate() (*x509.Certificate, *rsa.PrivateKey, error) {
 	// Try to find existing certificate
 	cert, key, err := findExistingCertificate()
 	if err == nil {
+		// Verify certificate installation
+		if err := checkCertificateInstallation(cert); err != nil {
+			// If certificate not installed properly, try to reinstall it
+			if err := installCertificate(cert.Raw, key); err != nil {
+				return nil, nil, fmt.Errorf("error reinstalling certificate: %v", err)
+			}
+		}
 		return cert, key, nil
 	}
 
@@ -724,43 +673,52 @@ func findOrCreateCertificate() (*x509.Certificate, *rsa.PrivateKey, error) {
 }
 
 func findExistingCertificate() (*x509.Certificate, *rsa.PrivateKey, error) {
-	certPath := filepath.Join(os.Getenv("USERPROFILE"), certFileName)
-	keyPath := filepath.Join(os.Getenv("USERPROFILE"), keyFileName)
+	userProfile := os.Getenv("USERPROFILE")
+	if userProfile == "" {
+		return nil, nil, fmt.Errorf("USERPROFILE environment variable not set")
+	}
+
+	certPath := filepath.Join(userProfile, certFileName)
+	keyPath := filepath.Join(userProfile, keyFileName)
 
 	// Check if files exist
 	if _, err := os.Stat(certPath); err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("certificate file not found: %v", err)
 	}
 	if _, err := os.Stat(keyPath); err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("key file not found: %v", err)
 	}
 
 	// Read certificate
 	certData, err := os.ReadFile(certPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("error reading certificate: %v", err)
 	}
-	certBlock, _ := pem.Decode(certData)
-	if certBlock == nil {
+
+	block, _ := pem.Decode(certData)
+	if block == nil {
 		return nil, nil, fmt.Errorf("failed to decode certificate PEM")
 	}
-	cert, err := x509.ParseCertificate(certBlock.Bytes)
+
+	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("error parsing certificate: %v", err)
 	}
 
 	// Read private key
 	keyData, err := os.ReadFile(keyPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("error reading private key: %v", err)
 	}
-	keyBlock, _ := pem.Decode(keyData)
-	if keyBlock == nil {
-		return nil, nil, fmt.Errorf("failed to decode key PEM")
+
+	block, _ = pem.Decode(keyData)
+	if block == nil {
+		return nil, nil, fmt.Errorf("failed to decode private key PEM")
 	}
-	key, err := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("error parsing private key: %v", err)
 	}
 
 	return cert, key, nil
@@ -1097,7 +1055,8 @@ func checkDriverInstallation(driverPath string) error {
 
 func signDriver(driverPath string, cert *x509.Certificate, privateKey *rsa.PrivateKey) error {
 	// Check if driver is already signed
-	verifyCmd := exec.Command("signtool", "verify", "/pa", driverPath)
+	var verifyCmd *exec.Cmd
+	verifyCmd = exec.Command("signtool", "verify", "/pa", driverPath)
 	if err := verifyCmd.Run(); err == nil {
 		return fmt.Errorf("driver is already signed")
 	}
@@ -1136,7 +1095,9 @@ func signDriver(driverPath string, cert *x509.Certificate, privateKey *rsa.Priva
 
 	// Install certificate in store
 	installCmd := exec.Command("certutil", "-f", "-addstore", "Root", certPath)
-	if output, err := installCmd.CombinedOutput(); err != nil {
+	var output []byte
+	output, err = installCmd.CombinedOutput()
+	if err != nil {
 		return fmt.Errorf("error installing certificate: %v\nOutput: %s", err, string(output))
 	}
 
@@ -1151,7 +1112,7 @@ func signDriver(driverPath string, cert *x509.Certificate, privateKey *rsa.Priva
 		"/fd", "sha256",
 		driverPath)
 	
-	output, err := cmd.CombinedOutput()
+	output, err = cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("error signing driver: %v\nOutput: %s", err, string(output))
 	}
@@ -1160,13 +1121,14 @@ func signDriver(driverPath string, cert *x509.Certificate, privateKey *rsa.Priva
 	time.Sleep(2 * time.Second)
 
 	// Verify the signature
-	verifyCmd := exec.Command(signtoolPath,
+	verifyCmd = exec.Command(signtoolPath,
 		"verify",
 		"/pa",
 		"/v",
 		driverPath)
 	
-	verifyOutput, err := verifyCmd.CombinedOutput()
+	var verifyOutput []byte
+	verifyOutput, err = verifyCmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("signature verification failed: %v\nOutput: %s", err, string(verifyOutput))
 	}
@@ -1177,7 +1139,9 @@ func signDriver(driverPath string, cert *x509.Certificate, privateKey *rsa.Priva
 func listExistingCertificates() string {
 	cmd := exec.Command("powershell", "-Command", "Get-ChildItem -Path Cert:\\LocalMachine\\Root | Where-Object {$_.Subject -like '*GoDriverSigner*'} | ForEach-Object { 'Certificate: ' + $_.Subject + [Environment]::NewLine + 'Serial Number: ' + $_.SerialNumber + [Environment]::NewLine + 'Valid From: ' + $_.NotBefore + [Environment]::NewLine + 'Valid To: ' + $_.NotAfter + [Environment]::NewLine + 'Thumbprint: ' + $_.Thumbprint + [Environment]::NewLine + '-------------------' }")
 	
-	output, err := cmd.CombinedOutput()
+	var output []byte
+	var err error
+	output, err = cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Sprintf("Error listing certificates: %v", err)
 	}
@@ -1193,9 +1157,65 @@ func deleteAllCertificates() error {
 			Remove-Item -Path "Cert:\LocalMachine\Root\$thumbprint" -DeleteKey
 		}`)
 	
-	output, err := cmd.CombinedOutput()
+	var output []byte
+	var err error
+	output, err = cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("error deleting certificates: %v\nOutput: %s", err, string(output))
 	}
 	return nil
+}
+
+func (mw *MyMainWindow) createCertificate() {
+	go func() {
+		mw.logMessage("Creating new certificate...")
+		mw.setProgress(20)
+		
+		cert, _, err := createAndInstallCertificate()
+		mw.Synchronize(func() {
+			if err != nil {
+				mw.showError("Certificate Creation Error", err)
+				mw.logMessage(fmt.Sprintf("Error: Failed to create certificate: %v", err))
+			} else {
+				mw.logMessage(fmt.Sprintf("Certificate created successfully\nSerial Number: %s", cert.SerialNumber))
+				certInfo := listExistingCertificates()
+				mw.logMessage("\nCurrent certificate:\n" + certInfo)
+			}
+			mw.setProgress(100)
+		})
+	}()
+}
+
+func (mw *MyMainWindow) showCertificate() {
+	certInfo := listExistingCertificates()
+	if certInfo != "" {
+		mw.logMessage("\nCurrent certificate:\n" + certInfo)
+	} else {
+		mw.logMessage("No certificates found")
+	}
+}
+
+func (mw *MyMainWindow) deleteCertificates() {
+	if walk.MsgBox(mw, "Warning",
+		"Are you sure you want to delete all GoDriverSigner certificates?",
+		walk.MsgBoxYesNo|walk.MsgBoxIconWarning) == walk.DlgCmdYes {
+		go func() {
+			mw.logMessage("Deleting all certificates...")
+			mw.setProgress(20)
+			
+			err := deleteAllCertificates()
+			mw.Synchronize(func() {
+				if err != nil {
+					mw.showError("Certificate Deletion Error", err)
+					mw.logMessage(fmt.Sprintf("Error: Failed to delete certificates: %v", err))
+				} else {
+					walk.MsgBox(mw, "Success", 
+						"All certificates deleted successfully",
+						walk.MsgBoxIconInformation)
+					mw.logMessage("All certificates deleted successfully")
+				}
+				mw.setProgress(100)
+			})
+		}()
+	}
 } 

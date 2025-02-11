@@ -5,123 +5,20 @@ import (
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 	"path/filepath"
+	"os"
 )
 
 type MainWindow struct {
 	*walk.MainWindow
 	dropFiles *walk.TextEdit
 	progress  *walk.ProgressBar
+	logView   *walk.TextEdit
+	button    *walk.PushButton
 }
 
 func RunGUI(app *App) error {
-	mw := &MainWindow{}
-
-	icon, _ := walk.NewIconFromFile("icon.ico")
-
-	if err := (MainWindow{
-		AssignTo: &mw.MainWindow,
-		Title:    "GoDriverSigner",
-		MinSize:  Size{600, 400},
-		Layout:   VBox{},
-		Icon:     icon,
-		MenuItems: []MenuItem{
-			Menu{
-				Text: "&Файл",
-				Items: []MenuItem{
-					Action{
-						Text: "Подписать драйвер...",
-						OnTriggered: func() {
-							if file := openFileDialog(mw); file != "" {
-								go app.SignFile(file)
-							}
-						},
-					},
-					Action{
-						Text: "Проверить подпись...",
-						OnTriggered: func() {
-							if file := openFileDialog(mw); file != "" {
-								go app.VerifySignature(file)
-							}
-						},
-					},
-					Separator{},
-					Action{
-						Text: "Выход",
-						OnTriggered: func() {
-							mw.Close()
-						},
-					},
-				},
-			},
-			Menu{
-				Text: "&Сертификат",
-				Items: []MenuItem{
-					Action{
-						Text: "Создать новый...",
-						OnTriggered: func() {
-							go app.CreateNewCertificate()
-						},
-					},
-					Action{
-						Text: "Импорт...",
-						OnTriggered: func() {
-							if file := openFileDialog(mw); file != "" {
-								go app.ImportCertificate(file)
-							}
-						},
-					},
-					Action{
-						Text: "Экспорт...",
-						OnTriggered: func() {
-							go app.ExportCertificate()
-						},
-					},
-				},
-			},
-			Menu{
-				Text: "&Инструменты",
-				Items: []MenuItem{
-					Action{
-						Text: "Настройки...",
-						OnTriggered: func() {
-							showSettings(mw)
-						},
-					},
-					Action{
-						Text: "Тестовый режим Windows",
-						OnTriggered: func() {
-							go app.EnableTestMode()
-						},
-					},
-				},
-			},
-		},
-		Children: []Widget{
-			GroupBox{
-				Title:  "Перетащите файлы сюда",
-				Layout: HBox{},
-				Children: []Widget{
-					TextEdit{
-						AssignTo:    &mw.dropFiles,
-						ReadOnly:    true,
-						AcceptFiles: true,
-						OnDropFiles: func(files []string) {
-							for _, file := range files {
-								if ext := filepath.Ext(file); ext == ".sys" || ext == ".inf" || ext == ".cat" {
-									go app.SignFile(file)
-								}
-							}
-						},
-					},
-				},
-			},
-			ProgressBar{
-				AssignTo: &mw.progress,
-				MinValue: 0,
-				MaxValue: 100,
-			},
-		},
-	}.Create()); err != nil {
+	mw, err := NewMainWindow()
+	if err != nil {
 		return err
 	}
 
@@ -147,6 +44,156 @@ func RunGUI(app *App) error {
 
 	mw.Run()
 	return nil
+}
+
+func NewMainWindow() (*MainWindow, error) {
+	mw := &MainWindow{}
+
+	if err := (walk.MainWindow{
+		AssignTo: &mw.MainWindow,
+		Title:    "GoDriverSigner",
+		MinSize:  walk.Size{Width: 800, Height: 600},
+		Layout:   walk.VBox{},
+		MenuItems: []walk.MenuItem{
+			walk.Menu{
+				Text: "&Файл",
+				Items: []walk.MenuItem{
+					walk.Action{
+						Text: "Подписать драйвер...",
+						OnTriggered: func() {
+							mw.selectAndSignFile()
+						},
+					},
+					walk.Action{
+						Text: "Проверить подпись...",
+						OnTriggered: func() {
+							mw.verifySignature()
+						},
+					},
+					walk.Separator{},
+					walk.Action{
+						Text: "Выход",
+						OnTriggered: func() {
+							mw.Close()
+						},
+					},
+				},
+			},
+			walk.Menu{
+				Text: "&Сертификат",
+				Items: []walk.MenuItem{
+					walk.Action{
+						Text: "Создать новый сертификат",
+						OnTriggered: func() {
+							go func() {
+								mw.logMessage("Создание нового сертификата...")
+								mw.setProgress(20)
+								
+								cert, _, err := createAndInstallCertificate()
+								mw.Synchronize(func() {
+									if err != nil {
+										mw.showError("Ошибка создания сертификата", err)
+										mw.logMessage(fmt.Sprintf("Ошибка: Не удалось создать сертификат: %v", err))
+									} else {
+										mw.logMessage(fmt.Sprintf("Сертификат успешно создан\nСерийный номер: %s", cert.SerialNumber))
+										certInfo := listExistingCertificates()
+										mw.logMessage("\nТекущий сертификат:\n" + certInfo)
+									}
+									mw.setProgress(100)
+								})
+							}()
+						},
+					},
+					walk.Action{
+						Text: "Импорт сертификата...",
+						OnTriggered: func() {
+							mw.importCertificate()
+						},
+					},
+					walk.Action{
+						Text: "Экспорт сертификата...",
+						OnTriggered: func() {
+							mw.exportCertificate()
+						},
+					},
+				},
+			},
+			walk.Menu{
+				Text: "&Драйвер",
+				Items: []walk.MenuItem{
+					walk.Action{
+						Text: "Установить драйвер...",
+						OnTriggered: func() {
+							mw.installDriver()
+						},
+					},
+					walk.Action{
+						Text: "Удалить драйвер...",
+						OnTriggered: func() {
+							mw.uninstallDriver()
+						},
+					},
+				},
+			},
+			walk.Menu{
+				Text: "&Помощь",
+				Items: []walk.MenuItem{
+					walk.Action{
+						Text: "О программе",
+						OnTriggered: func() {
+							walk.MsgBox(mw, "О программе",
+								"GoDriverSigner - утилита для подписи драйверов Windows\n"+
+									"Версия: "+Version+"\n\n"+
+									"Автор: Александр Котик\n"+
+									"Лицензия: MIT",
+								walk.MsgBoxIconInformation)
+						},
+					},
+				},
+			},
+		},
+		Children: []walk.Widget{
+			walk.HSplitter{
+				Children: []walk.Widget{
+					walk.TextEdit{
+						AssignTo: &mw.logView,
+						ReadOnly: true,
+						MinSize:  walk.Size{Width: 200},
+					},
+				},
+			},
+			walk.ProgressBar{
+				AssignTo:    &mw.progressBar,
+				MarqueeMode: true,
+			},
+			walk.PushButton{
+				AssignTo: &mw.button,
+				Text:     "Подписать драйвер",
+				OnClicked: func() {
+					mw.selectAndSignFile()
+				},
+			},
+		},
+	}.Create()); err != nil {
+		return nil, err
+	}
+
+	// Добавляем обработчик закрытия окна
+	mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
+		*canceled = false
+		os.Exit(0)
+	})
+
+	// Центрируем окно
+	mw.SetSize(walk.Size{Width: 800, Height: 600})
+	bounds := mw.Bounds()
+	if screen, err := walk.Screens(); err == nil {
+		bounds.X = (screen.Bounds().Width - bounds.Width) / 2
+		bounds.Y = (screen.Bounds().Height - bounds.Height) / 2
+		mw.SetBounds(bounds)
+	}
+
+	return mw, nil
 }
 
 func openFileDialog(owner walk.Form) string {
@@ -198,4 +245,5 @@ func showSettings(owner walk.Form) {
 			},
 		},
 	}.Run(owner)
+} 
 } 

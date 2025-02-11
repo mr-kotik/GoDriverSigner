@@ -1,0 +1,42 @@
+# Binaries and test files
+*.exe
+*.sys
+*.dll
+*.o
+*.a
+*.so
+*.dylib
+*.test
+*.out
+rsrc.syso
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Windows specific
+Thumbs.db
+Desktop.ini
+
+# Build and debug
+debug/
+release/
+build/
+bin/
+*.pdb
+
+# Certificate files
+*.cer
+*.pfx
+*.key
+*.pem
+*.p12
+
+# Log files
+*.log
+
+# Config files with sensitive data
+config.json 
