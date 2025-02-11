@@ -40,4 +40,21 @@ bin/
 *.log
 
 # Config files with sensitive data
-config.json 
+config.json
+
+# Resource files
+*.syso
+*.res
+*.rsrc
+
+# Temporary files
+*.tmp
+*~
+*.bak
+
+# Go specific
+_test
+_testmain.go
+*.test
+*.prof
+.DS_Store 
